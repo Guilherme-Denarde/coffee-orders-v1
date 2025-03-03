@@ -2,7 +2,7 @@ import functions_framework
 import json
 import uuid
 import datetime
-from flask import abort, Request
+from flask import Request
 from google.cloud import firestore
 
 # Initialize Firestore client
@@ -15,6 +15,26 @@ def utc_now_iso():
 
 @functions_framework.http
 def api(request: Request):
+    # Set CORS headers for the preflight request
+    if request.method == 'OPTIONS':
+        # Allows GET, POST, PATCH, DELETE requests from any origin with the Content-Type
+        # header and caches preflight response for 3600s
+        headers = {
+            'Access-Control-Allow-Origin': 'https://coffee-orders-next.vercel.app',
+            'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, PUT',
+            'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+            'Access-Control-Max-Age': '3600'
+        }
+        return ('', 204, headers)
+    
+    # Set CORS headers for the main request
+    headers = {
+        'Access-Control-Allow-Origin': 'https://coffee-orders-next.vercel.app',
+        'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, PUT',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        'Content-Type': 'application/json'
+    }
+        
     path = request.path
     method = request.method
     parts = path.split("/")
@@ -30,49 +50,49 @@ def api(request: Request):
     # Handle orders routes
     if is_pedidos_base:
         if method == "POST":
-            return criar_pedido(request)
+            return criar_pedido(request, headers)
         elif method == "GET":
-            return listar_pedidos(request)
+            return listar_pedidos(request, headers)
         else:
-            return abort(405, f"Method {method} not allowed on /pedidos")
+            return (json.dumps({"error": f"Method {method} not allowed on /pedidos"}), 405, headers)
 
     elif is_pedidos_with_id:
         pedido_id = parts[2]
         if method == "GET":
-            return obter_pedido(request, pedido_id)
+            return obter_pedido(request, pedido_id, headers)
         elif method == "PATCH":
-            return atualizar_status(request, pedido_id)
+            return atualizar_status(request, pedido_id, headers)
         elif method == "DELETE":
-            return deletar_pedido(request, pedido_id)
+            return deletar_pedido(request, pedido_id, headers)
         else:
-            return abort(405, f"Method {method} not allowed on /pedidos/<id>")
+            return (json.dumps({"error": f"Method {method} not allowed on /pedidos/<id>"}), 405, headers)
 
     # Handle products routes
     elif is_produtos_base:
         if method == "POST":
-            return criar_produto(request)
+            return criar_produto(request, headers)
         elif method == "GET":
-            return listar_produtos(request)
+            return listar_produtos(request, headers)
         else:
-            return abort(405, f"Method {method} not allowed on /produtos")
+            return (json.dumps({"error": f"Method {method} not allowed on /produtos"}), 405, headers)
 
     elif is_produtos_with_id:
         produto_id = parts[2]
         if method == "GET":
-            return obter_produto(request, produto_id)
+            return obter_produto(request, produto_id, headers)
         elif method == "PUT":
-            return atualizar_produto(request, produto_id)
+            return atualizar_produto(request, produto_id, headers)
         elif method == "DELETE":
-            return deletar_produto(request, produto_id)
+            return deletar_produto(request, produto_id, headers)
         else:
-            return abort(405, f"Method {method} not allowed on /produtos/<id>")
+            return (json.dumps({"error": f"Method {method} not allowed on /produtos/<id>"}), 405, headers)
 
     else:
-        return abort(404, f"Path {path} not found")
+        return (json.dumps({"error": f"Path {path} not found"}), 404, headers)
 
 # ------------------ PEDIDOS (Orders) ------------------ #
 
-def criar_pedido(request: Request):
+def criar_pedido(request: Request, headers):
     """
     Cria um novo pedido e valida:
       - Se todos os produtos listados existem na base.
@@ -81,10 +101,10 @@ def criar_pedido(request: Request):
     """
     data = request.get_json(silent=True)
     if not data:
-        return abort(400, "Invalid JSON body")
+        return (json.dumps({"error": "Invalid JSON body"}), 400, headers)
 
     if "cliente" not in data or "email" not in data or "itens" not in data:
-        return abort(400, "Missing required fields: cliente, email, itens")
+        return (json.dumps({"error": "Missing required fields: cliente, email, itens"}), 400, headers)
 
     novo_id = str(uuid.uuid4())
     agora = utc_now_iso()
@@ -94,13 +114,13 @@ def criar_pedido(request: Request):
     for item in data["itens"]:
         product_id = item.get("produto_id")
         if not product_id:
-            return abort(400, "Cada item deve conter um 'produto_id'")
+            return (json.dumps({"error": "Cada item deve conter um 'produto_id'"}), 400, headers)
         if "quantidade" not in item:
-            return abort(400, "Cada item deve conter uma 'quantidade'")
+            return (json.dumps({"error": "Cada item deve conter uma 'quantidade'"}), 400, headers)
 
         produto_ref = db.collection(PRODUTOS_COLLECTION).document(product_id).get()
         if not produto_ref.exists:
-            return abort(400, f"O produto com ID {product_id} não existe")
+            return (json.dumps({"error": f"O produto com ID {product_id} não existe"}), 400, headers)
 
         produto_data = produto_ref.to_dict()
 
@@ -108,7 +128,7 @@ def criar_pedido(request: Request):
         qtd_solicitada = item["quantidade"]
         estoque_atual = produto_data.get("estoque", 0)
         if estoque_atual < qtd_solicitada:
-            return abort(400, f"Estoque insuficiente para o produto '{produto_data.get('nome', product_id)}'")
+            return (json.dumps({"error": f"Estoque insuficiente para o produto '{produto_data.get('nome', product_id)}'"}), 400, headers)
 
         # Overwrite the item price from the DB for consistency
         preco_oficial = produto_data.get("preco", 0.0)
@@ -147,9 +167,9 @@ def criar_pedido(request: Request):
         "total": total,
         "data_criacao": agora
     }
-    return (json.dumps(response_data), 201, {"Content-Type": "application/json"})
+    return (json.dumps(response_data), 201, headers)
 
-def listar_pedidos(request: Request):
+def listar_pedidos(request: Request, headers):
     pedidos_ref = db.collection(PEDIDOS_COLLECTION).stream()
     all_pedidos = []
     for p in pedidos_ref:
@@ -171,9 +191,9 @@ def listar_pedidos(request: Request):
         reverse=True
     )
 
-    return (json.dumps(all_pedidos), 200, {"Content-Type": "application/json"})
+    return (json.dumps(all_pedidos), 200, headers)
 
-def obter_pedido(request: Request, pedido_id_or_param: str):
+def obter_pedido(request: Request, pedido_id_or_param: str, headers):
     # Check if we're searching by client name (param: ?cliente=...)
     query_params = request.args
     search_by_client = query_params.get('cliente')
@@ -185,29 +205,29 @@ def obter_pedido(request: Request, pedido_id_or_param: str):
         for doc in pedidos_ref:
             results.append(doc.to_dict())
         if not results:
-            return abort(404, f"Nenhum pedido encontrado para o cliente: {search_by_client}")
-        return (json.dumps(results), 200, {"Content-Type": "application/json"})
+            return (json.dumps({"error": f"Nenhum pedido encontrado para o cliente: {search_by_client}"}), 404, headers)
+        return (json.dumps(results), 200, headers)
     else:
         # Search by ID
         pedido_ref = db.collection(PEDIDOS_COLLECTION).document(pedido_id_or_param).get()
         if not pedido_ref.exists:
-            return abort(404, "Pedido não encontrado")
-        return (json.dumps(pedido_ref.to_dict()), 200, {"Content-Type": "application/json"})
+            return (json.dumps({"error": "Pedido não encontrado"}), 404, headers)
+        return (json.dumps(pedido_ref.to_dict()), 200, headers)
 
-def atualizar_status(request: Request, pedido_id: str):
+def atualizar_status(request: Request, pedido_id: str, headers):
     pedido_ref = db.collection(PEDIDOS_COLLECTION).document(pedido_id)
     pedido = pedido_ref.get()
 
     if not pedido.exists:
-        return abort(404, "Pedido não encontrado")
+        return (json.dumps({"error": "Pedido não encontrado"}), 404, headers)
 
     data = request.get_json(silent=True)
     if not data or "status" not in data:
-        return abort(400, "Missing 'status' in request body")
+        return (json.dumps({"error": "Missing 'status' in request body"}), 400, headers)
 
     allowed_status = ["PENDENTE", "PROCESSANDO", "ENVIADO", "CANCELADO"]
     if data["status"] not in allowed_status:
-        return abort(400, f"Status inválido: {data['status']}")
+        return (json.dumps({"error": f"Status inválido: {data['status']}"}), 400, headers)
 
     pedido_ref.update({
         "status": data["status"],
@@ -218,26 +238,26 @@ def atualizar_status(request: Request, pedido_id: str):
         "message": "Pedido atualizado com sucesso",
         "status": data["status"]
     }
-    return (json.dumps(response_data), 200, {"Content-Type": "application/json"})
+    return (json.dumps(response_data), 200, headers)
 
-def deletar_pedido(request: Request, pedido_id: str):
+def deletar_pedido(request: Request, pedido_id: str, headers):
     pedido_ref = db.collection(PEDIDOS_COLLECTION).document(pedido_id)
     pedido = pedido_ref.get()
     if not pedido.exists:
-        return abort(404, "Pedido não encontrado")
+        return (json.dumps({"error": "Pedido não encontrado"}), 404, headers)
 
     pedido_ref.delete()
-    return ("", 204)
+    return ("", 204, headers)
 
 # ------------------ PRODUTOS (Products) ------------------ #
 
-def criar_produto(request: Request):
+def criar_produto(request: Request, headers):
     data = request.get_json(silent=True)
     if not data:
-        return abort(400, "Invalid JSON body")
+        return (json.dumps({"error": "Invalid JSON body"}), 400, headers)
 
     if "nome" not in data or "preco" not in data:
-        return abort(400, "Missing required fields: nome, preco")
+        return (json.dumps({"error": "Missing required fields: nome, preco"}), 400, headers)
 
     novo_id = str(uuid.uuid4())
     agora = utc_now_iso()
@@ -245,7 +265,7 @@ def criar_produto(request: Request):
     # imagens can be a list of URLs
     imagens = data.get("imagens")
     if imagens and not isinstance(imagens, list):
-        return abort(400, "'imagens' deve ser uma lista de URLs ou omitido")
+        return (json.dumps({"error": "'imagens' deve ser uma lista de URLs ou omitido"}), 400, headers)
 
     novo_produto = {
         "id": novo_id,
@@ -268,9 +288,9 @@ def criar_produto(request: Request):
         "preco": float(data["preco"]),
         "data_criacao": agora
     }
-    return (json.dumps(response_data), 201, {"Content-Type": "application/json"})
+    return (json.dumps(response_data), 201, headers)
 
-def listar_produtos(request: Request):
+def listar_produtos(request: Request, headers):
     # Check if we're filtering by category: ?categoria=...
     query_params = request.args
     filter_by_category = query_params.get('categoria')
@@ -299,9 +319,9 @@ def listar_produtos(request: Request):
     # Sort by nome
     all_produtos.sort(key=lambda x: x.get("nome", ""))
 
-    return (json.dumps(all_produtos), 200, {"Content-Type": "application/json"})
+    return (json.dumps(all_produtos), 200, headers)
 
-def obter_produto(request: Request, produto_id: str):
+def obter_produto(request: Request, produto_id: str, headers):
     # Check if we're searching by name: ?nome=...
     query_params = request.args
     search_by_name = query_params.get('nome')
@@ -312,45 +332,45 @@ def obter_produto(request: Request, produto_id: str):
         for doc in produtos_ref:
             results.append(doc.to_dict())
         if not results:
-            return abort(404, f"Nenhum produto encontrado com nome: {search_by_name}")
-        return (json.dumps(results), 200, {"Content-Type": "application/json"})
+            return (json.dumps({"error": f"Nenhum produto encontrado com nome: {search_by_name}"}), 404, headers)
+        return (json.dumps(results), 200, headers)
     else:
         # Search by ID
         produto_ref = db.collection(PRODUTOS_COLLECTION).document(produto_id).get()
         if not produto_ref.exists:
-            return abort(404, "Produto não encontrado")
+            return (json.dumps({"error": "Produto não encontrado"}), 404, headers)
 
-        return (json.dumps(produto_ref.to_dict()), 200, {"Content-Type": "application/json"})
+        return (json.dumps(produto_ref.to_dict()), 200, headers)
 
-def atualizar_produto(request: Request, produto_id: str):
+def atualizar_produto(request: Request, produto_id: str, headers):
     produto_ref = db.collection(PRODUTOS_COLLECTION).document(produto_id)
     produto = produto_ref.get()
 
     if not produto.exists:
-        return abort(404, "Produto não encontrado")
+        return (json.dumps({"error": "Produto não encontrado"}), 404, headers)
 
     data = request.get_json(silent=True)
     if not data:
-        return abort(400, "Invalid JSON body")
+        return (json.dumps({"error": "Invalid JSON body"}), 400, headers)
 
     # Ensure price is a float if present
     if "preco" in data:
         try:
             data["preco"] = float(data["preco"])
         except ValueError:
-            return abort(400, "Preço deve ser um número válido")
+            return (json.dumps({"error": "Preço deve ser um número válido"}), 400, headers)
 
     # Ensure estoque is an integer if present
     if "estoque" in data:
         try:
             data["estoque"] = int(data["estoque"])
         except ValueError:
-            return abort(400, "Estoque deve ser um número inteiro válido")
+            return (json.dumps({"error": "Estoque deve ser um número inteiro válido"}), 400, headers)
 
     # Ensure imagens is a list if present
     if "imagens" in data:
         if not isinstance(data["imagens"], list):
-            return abort(400, "'imagens' deve ser uma lista de URLs")
+            return (json.dumps({"error": "'imagens' deve ser uma lista de URLs"}), 400, headers)
 
     # Update with all provided fields + update timestamp
     update_data = {**data, "data_atualizacao": utc_now_iso()}
@@ -360,14 +380,14 @@ def atualizar_produto(request: Request, produto_id: str):
         "message": "Produto atualizado com sucesso",
         "id": produto_id
     }
-    return (json.dumps(response_data), 200, {"Content-Type": "application/json"})
+    return (json.dumps(response_data), 200, headers)
 
-def deletar_produto(request: Request, produto_id: str):
+def deletar_produto(request: Request, produto_id: str, headers):
     produto_ref = db.collection(PRODUTOS_COLLECTION).document(produto_id)
     produto = produto_ref.get()
 
     if not produto.exists:
-        return abort(404, "Produto não encontrado")
+        return (json.dumps({"error": "Produto não encontrado"}), 404, headers)
 
     # Check if product is referenced in any orders before deletion
     pedidos_ref = db.collection(PEDIDOS_COLLECTION).stream()
@@ -375,7 +395,7 @@ def deletar_produto(request: Request, produto_id: str):
         pedido_data = pedido.to_dict()
         for item in pedido_data.get("itens", []):
             if item.get("produto_id") == produto_id:
-                return abort(400, f"Não é possível excluir o produto pois está vinculado ao pedido {pedido.id}")
+                return (json.dumps({"error": f"Não é possível excluir o produto pois está vinculado ao pedido {pedido.id}"}), 400, headers)
 
     produto_ref.delete()
-    return ("", 204)
+    return ("", 204, headers)
