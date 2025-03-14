@@ -6,7 +6,7 @@ from flask import Request
 from google.cloud import firestore
 
 # Initialize Firestore client
-db = firestore.Client()
+db = firestore.Client(project="coffee-orders-store")
 PEDIDOS_COLLECTION = "pedidos"
 PRODUTOS_COLLECTION = "produtos"
 
